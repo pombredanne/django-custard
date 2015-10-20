@@ -3,9 +3,37 @@ Changelog
 
 Only important changes are mentioned below.
 
+v0.11 (unreleased)
+-----------------
+
+* Fixed admin integration
+* Updated example project
+* Removed validate_unique for fields so your subclass can decide what to do with fields with the same name
+* Removed models.py (useless with Django>=1.7)
+* Dropped support for Django < 1.7 (insecure)
+* Dropped support for Python 3.2 and 3.3
+
+
+v0.10 (2015-06-15)
+-----------------
+
+* Added Mixin.__getattr__ to access model custom fields like any other fields
+* Fixed a problem when using commit=False in ModelForms
+* Fixed a problem when custom_content_types is passed in CustomFieldsBuilder constructor (thanks to Kamil Wargula for the report and patch)
+* Revert problem in mixin "get_custom_value" introduced with https://github.com/kunitoki/django-custard/commit/f3e171e6170d33a1ba6aba170e76549c55021ade
+
+
+v0.9 (2015-03-12)
+-----------------
+
+* Added ability to pass "value" in CustomValuesModel.objects.create
+* Fixed https://github.com/kunitoki/django-custard/pull/2
+* More tests and fixes
+
 
 v0.8 (2014-10-08)
 -----------------
+
 * Fixed https://github.com/kunitoki/django-custard/issues/1
 * More tests
 * More coverage

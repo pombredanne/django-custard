@@ -41,7 +41,7 @@ custom ModelForm using ``builder.create_modelform``::
 
 It's possible to subclass the form and override 3 functions to specify even more
 the search for custom fields and values (for example when filtering with User
-or Group, so multiple cutom fields can be enable for each User or Group independently):
+or Group, so multiple custom fields can be enable for each User or Group independently):
 
 ``get_fields_for_content_type(self, content_type)``
     This function will return all fields defined for a specific content type
@@ -73,6 +73,31 @@ Here is an example::
           return CustomValuesModel(custom_field=field,
                                    object_id=object_id,
                                    value=value)
+
+
+When using this form with ``commit=False`` you have to take care of calling
+``save_custom_fields`` after you saved your model instance to save custom field
+values too, as they need an instance already in the database::
+
+  class ExampleForm(builder.create_modelform()):
+      class Meta:
+          model = Example
+
+  form = ExampleForm(request.POST, instance=example_object)
+  if form.is_valid():
+      # Do not hit the database
+      obj = form.save(commit=False)
+
+      # Do your logic here...
+
+      # Save the object to the database
+      obj.save()
+
+      # Save many to many as Django usual
+      form.save_m2m()
+
+      # Save the custom fields
+      form.save_custom_fields()
 
 
 ModelAdmin
@@ -131,5 +156,4 @@ Django Custard modified version for search:
   {% block search %}
     {% include "custard/admin/search_form.html" %}
   {% endblock %}
-
 

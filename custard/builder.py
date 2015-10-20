@@ -1,11 +1,13 @@
+from __future__ import unicode_literals
 from django.db import models
 from django.db.models import Q
-from django.db.models.loading import get_model
 from django import forms
+from django.apps import apps
 from django.contrib import admin
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.contenttypes import generic
-from django.core.exceptions import ValidationError, NON_FIELD_ERRORS
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.core.exceptions import ObjectDoesNotExist, ValidationError, NON_FIELD_ERRORS
+from django.utils import six
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.functional import cached_property
 from django.utils.translation import ugettext_lazy as _
@@ -19,7 +21,8 @@ from .utils import import_class
 #==============================================================================
 class CustomFieldsBuilder(object):
     """
-
+    The builder class is the core of django-custard.
+    From here it is possible to setup custom fields support for your models.
     """
 
     #--------------------------------------------------------------------------
@@ -37,20 +40,29 @@ class CustomFieldsBuilder(object):
         self.fields_model = fields_model.split(".")
         self.values_model = values_model.split(".")
         self.custom_content_types = custom_content_types
-        self.content_types_query = Q(name__in=self.custom_content_types) \
-            if self.custom_content_types is not None else Q()
+        if self.custom_content_types and len(self.custom_content_types):
+            self.content_types_query = None
+            for c in self.custom_content_types:
+                model_tuple = c.split(".")
+                model_query = Q(app_label=model_tuple[0], model=model_tuple[1])
+                if self.content_types_query:
+                    self.content_types_query |= model_query
+                else:
+                    self.content_types_query = model_query
+        else:
+            self.content_types_query = Q()
 
     #--------------------------------------------------------------------------
     @property
     def fields_model_class(self):
-        return get_model(self.fields_model[0], self.fields_model[1])
+        return apps.get_model(self.fields_model[0], self.fields_model[1])
 
     @property
     def values_model_class(self):
-        return get_model(self.values_model[0], self.values_model[1])
+        return apps.get_model(self.values_model[0], self.values_model[1])
 
     #--------------------------------------------------------------------------
-    def create_fields(self, base_model=models.Model):
+    def create_fields(self, base_model=models.Model, base_manager=models.Manager):
         """
         This method will create a model which will hold field types defined
         at runtime for each ContentType.
@@ -60,6 +72,9 @@ class CustomFieldsBuilder(object):
         """
 
         CONTENT_TYPES = self.content_types_query
+
+        class CustomContentTypeFieldManager(base_manager):
+            pass
 
         @python_2_unicode_compatible
         class CustomContentTypeField(base_model):
@@ -74,8 +89,8 @@ class CustomFieldsBuilder(object):
             )
 
             content_type = models.ForeignKey(ContentType,
-                                             related_name='custom_fields',
                                              verbose_name=_('content type'),
+                                             related_name='+',
                                              limit_choices_to=CONTENT_TYPES)
             name = models.CharField(_('name'), max_length=100, db_index=True)
             label = models.CharField(_('label'), max_length=100)
@@ -89,8 +104,9 @@ class CustomFieldsBuilder(object):
             min_value = models.FloatField(_('min value'), blank=True, null=True)
             max_value = models.FloatField(_('max value'), blank=True, null=True)
 
+            objects = CustomContentTypeFieldManager()
+
             class Meta:
-                unique_together = ('content_type', 'name')
                 verbose_name = _('custom field')
                 verbose_name_plural = _('custom fields')
                 abstract = True
@@ -110,13 +126,13 @@ class CustomFieldsBuilder(object):
                     #    print obj
                     pass
 
-            def validate_unique(self, exclude=None):
-                # field name already defined in Model class
+            def _check_validate_already_defined_in_model(self):
                 model = self.content_type.model_class()
                 if self.name in [f.name for f in model._meta.fields]:
                     raise ValidationError({ 'name': (_('Custom field already defined as model field for content type %(model_name)s') % {'model_name': model.__name__},) })
 
-                # field name already defined in custom fields for content type
+            def _check_validate_already_defined_in_custom_fields(self):
+                model = self.content_type.model_class()
                 qs = self.__class__._default_manager.filter(
                     content_type=self.content_type,
                     name=self.name,
@@ -132,27 +148,42 @@ class CustomFieldsBuilder(object):
         return CustomContentTypeField
 
     #--------------------------------------------------------------------------
-    def create_values(self, base_model=models.Model):
+    def create_values(self, base_model=models.Model, base_manager=models.Manager):
         """
         This method will create a model which will hold field values for
         field types of custom_field_model.
 
         :param base_model:
+        :param base_manager:
         :return:
         """
 
         _builder = self
 
+        class CustomContentTypeFieldValueManager(base_manager):
+            def create(self, **kwargs):
+                """
+                Subclass create in order to be able to use "value" in kwargs
+                instead of using "value_%s" passing also type directly
+                """
+                if 'value' in kwargs:
+                    value = kwargs.pop('value')
+                    created_object = super(CustomContentTypeFieldValueManager, self).create(**kwargs)
+                    created_object.value = value
+                    return created_object
+                else:
+                    return super(CustomContentTypeFieldValueManager, self).create(**kwargs)
+
         @python_2_unicode_compatible
         class CustomContentTypeFieldValue(base_model):
             custom_field = models.ForeignKey('.'.join(_builder.fields_model),
                                              verbose_name=_('custom field'),
-                                             related_name='field')
+                                             related_name='+')
             content_type = models.ForeignKey(ContentType, editable=False,
                                              verbose_name=_('content type'),
                                              limit_choices_to=_builder.content_types_query)
             object_id = models.PositiveIntegerField(_('object id'), db_index=True)
-            content_object = generic.GenericForeignKey('content_type', 'object_id')
+            content_object = GenericForeignKey('content_type', 'object_id')
 
             value_text = models.TextField(blank=True, null=True)
             value_integer = models.IntegerField(blank=True, null=True)
@@ -161,6 +192,8 @@ class CustomFieldsBuilder(object):
             value_date = models.DateField(blank=True, null=True)
             value_datetime = models.DateTimeField(blank=True, null=True)
             value_boolean = models.NullBooleanField(blank=True)
+
+            objects = CustomContentTypeFieldValueManager()
 
             def _get_value(self):
                 return getattr(self, 'value_%s' % self.custom_field.data_type)
@@ -220,20 +253,22 @@ class CustomFieldsBuilder(object):
                 :return:
                 """
                 query = None
+                lookups = (
+                    '%s__%s' % ('value_text', 'icontains'),
+                )
                 content_type = ContentType.objects.get_for_model(self.model)
                 custom_args = dict({ 'content_type': content_type, 'searchable': True }, **custom_args)
                 custom_fields = dict((f.name, f) for f in _builder.fields_model_class.objects.filter(**custom_args))
-                for key, f in custom_fields.items():
-                    value_lookup = 'value_text'
-                    value_lookup = '%s__%s' % (value_lookup, 'icontains')
-                    found = _builder.values_model_class.objects.filter(**{ 'custom_field': f,
-                                                                           'content_type': content_type,
-                                                                           value_lookup: search_data })
-                    if found.count() > 0:
-                        if query is None:
-                            query = Q()
-                        query = query & Q(**{ str('%s__in' % self.model._meta.pk.name):
-                                              [obj.object_id for obj in found] })
+                for value_lookup in lookups:
+                    for key, f in custom_fields.items():
+                        found = _builder.values_model_class.objects.filter(**{ 'custom_field': f,
+                                                                               'content_type': content_type,
+                                                                               value_lookup: search_data })
+                        if found.count() > 0:
+                            if query is None:
+                                query = Q()
+                            query = query & Q(**{ str('%s__in' % self.model._meta.pk.name):
+                                                  [obj.object_id for obj in found] })
                 if query is None:
                     return self.get_queryset().none()
                 return self.get_queryset().filter(query)
@@ -265,28 +300,33 @@ class CustomFieldsBuilder(object):
                 """ Return a list of custom fields for this model """
                 return _builder.fields_model_class.objects.filter(content_type=self._content_type)
 
-            def get_custom_field(self, field_name):
-                """ Get a custom field object for this model """
-                return _builder.fields_model_class.objects.get(name=field_name,
-                                                               content_type=self._content_type)
-
-            def get_custom_value(self, field_name):
+            def get_custom_value(self, field):
                 """ Get a value for a specified custom field """
-                custom_value, created = \
-                    _builder.values_model_class.objects.get_or_create(custom_field__name=field_name,
-                                                                      content_type=self._content_type,
-                                                                      object_id=self.pk)
-                return custom_value.value
+                return _builder.values_model_class.objects.get(custom_field=field,
+                                                               content_type=self._content_type,
+                                                               object_id=self.pk)
 
-            def set_custom_value(self, field_name, value):
+            def set_custom_value(self, field, value):
                 """ Set a value for a specified custom field """
                 custom_value, created = \
-                    _builder.values_model_class.objects.get_or_create(custom_field__name=field_name,
+                    _builder.values_model_class.objects.get_or_create(custom_field=field,
+                                                                      content_type=self._content_type,
                                                                       object_id=self.pk)
                 custom_value.value = value
                 custom_value.full_clean()
                 custom_value.save()
                 return custom_value
+
+            #def __getattr__(self, name):
+            #    """ Get a value for a specified custom field """
+            #    try:
+            #        obj = _builder.values_model_class.objects.get(custom_field__name=name,
+            #                                                      content_type=self._content_type,
+            #                                                      object_id=self.pk)
+            #        return obj.value
+            #    except ObjectDoesNotExist:
+            #        pass
+            #    return super(CustomModelMixin, self).__getattr__(name)
 
         return CustomModelMixin
 
@@ -333,12 +373,10 @@ class CustomFieldsBuilder(object):
                 """
                 Save the form
                 """
-                self.instance = super(CustomFieldModelBaseForm, self).save(commit)
-                if self.instance:
+                self.instance = super(CustomFieldModelBaseForm, self).save(commit=commit)
+                if self.instance and commit:
                     self.instance.save()
-                if not self.instance.pk:
-                    raise Exception("Cannot create an object for some reason")
-                self.save_custom_fields()
+                    self.save_custom_fields()
                 return self.instance
 
             def init_custom_fields(self):
@@ -366,6 +404,9 @@ class CustomFieldsBuilder(object):
 
             def save_custom_fields(self):
                 """ Perform save and validation over the custom fields """
+                if not self.instance.pk:
+                    raise Exception("The model instance has not been saved. Have you called instance.save() ?")
+
                 content_type = self.get_content_type()
                 fields = self.get_fields_for_content_type(content_type)
                 for f in fields:
@@ -518,4 +559,15 @@ class CustomFieldsBuilder(object):
             def __init__(self, *args, **kwargs):
                 super(CustomFieldModelBaseAdmin, self).__init__(*args, **kwargs)
 
+            def save_model(self, request, obj, form, change):
+                obj.save()
+                if hasattr(form, 'save_custom_fields'):
+                    form.save_custom_fields()
+
         return CustomFieldModelBaseAdmin
+
+
+#===============================================================================
+# This class is an empty class to avoid migrations errors
+class CustomModelMixin(object):
+    pass

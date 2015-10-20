@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 import sys
 from django.conf import settings as django_settings
 from django.utils.functional import cached_property as settings_property
@@ -12,7 +13,7 @@ if 'test' in sys.argv:
 #==============================================================================
 # Constants
 CUSTOM_TYPE_TEXT     = 'text'
-CUSTOM_TYPE_INTEGER  = 'int'
+CUSTOM_TYPE_INTEGER  = 'integer'
 CUSTOM_TYPE_FLOAT    = 'float'
 CUSTOM_TYPE_TIME     = 'time'
 CUSTOM_TYPE_DATE     = 'date'
